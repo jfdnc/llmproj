@@ -9,6 +9,7 @@ Minimal, tab-delimited DSL for scaffolding software projects using LLMs.
 ./llmproj build project.lp -o prompt.txt   # Save to file
 ./llmproj build project.lp --clipboard     # Copy to clipboard
 ./llmproj validate project.lp              # Validate syntax
+./llmproj template [name]                   # Create template .lp file
 ```
 
 ## DSL Format
@@ -37,4 +38,15 @@ structure
 			skip: unused.ts
 ```
 
-The CLI generates comprehensive prompts with DSL specifications, project details, and implementation guidelines for any LLM.# llmproj
+The CLI generates comprehensive prompts with DSL specifications, project details, and implementation guidelines for any LLM.
+
+## Getting Started
+
+Create a new project template:
+
+```bash
+./llmproj template                    # Creates template.lp
+./llmproj template my-project         # Creates my-project.lp
+```
+
+The template includes all sections with commented examples and usage instructions.
