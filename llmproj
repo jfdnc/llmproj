@@ -1,0 +1,341 @@
+#!/bin/bash
+
+# llmproj - CLI tool for processing .lp files
+# Usage: llmproj build project.lp [-o output.txt] [--clipboard]
+#        llmproj validate project.lp
+
+set -e
+
+show_help() {
+    cat << EOF
+llmproj - CLI tool for processing .lp files
+
+Usage:
+    llmproj build <file.lp>                 Generate prompt to stdout
+    llmproj build <file.lp> -o <output>     Save prompt to file
+    llmproj build <file.lp> --clipboard     Copy prompt to clipboard
+    llmproj validate <file.lp>              Validate syntax only
+
+Options:
+    -o, --output <file>    Save output to file
+    --clipboard           Copy output to clipboard
+    -h, --help           Show this help message
+EOF
+}
+
+# Parse command line arguments
+COMMAND=""
+INPUT_FILE=""
+OUTPUT_FILE=""
+USE_CLIPBOARD=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        build|validate)
+            COMMAND="$1"
+            shift
+            ;;
+        -o|--output)
+            OUTPUT_FILE="$2"
+            shift 2
+            ;;
+        --clipboard)
+            USE_CLIPBOARD=true
+            shift
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            if [[ -z "$INPUT_FILE" ]]; then
+                INPUT_FILE="$1"
+            else
+                echo "Error: Unknown argument '$1'"
+                show_help
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Validate arguments
+if [[ -z "$COMMAND" ]]; then
+    echo "Error: No command specified"
+    show_help
+    exit 1
+fi
+
+if [[ -z "$INPUT_FILE" ]]; then
+    echo "Error: No input file specified"
+    show_help
+    exit 1
+fi
+
+if [[ ! -f "$INPUT_FILE" ]]; then
+    echo "Error: File '$INPUT_FILE' not found"
+    exit 1
+fi
+
+# Check if file has .lp extension
+if [[ "$INPUT_FILE" != *.lp ]]; then
+    echo "Warning: File '$INPUT_FILE' doesn't have .lp extension"
+fi
+
+# Basic validation function
+validate_lp_file() {
+    local file="$1"
+    local line_num=0
+    local current_section=""
+    local errors=0
+    
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line_num=$((line_num + 1))
+        
+        # Skip empty lines and comments
+        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+            continue
+        fi
+        
+        # Check for section headers (no indentation)
+        if [[ "$line" =~ ^[a-zA-Z] ]]; then
+            current_section="$(echo "$line" | tr -d '[:space:]')"
+            if [[ ! "$current_section" =~ ^(project|environment|dependencies|structure)$ ]]; then
+                echo "Line $line_num: Unknown section '$current_section'"
+                errors=$((errors + 1))
+            fi
+            continue
+        fi
+        
+        # Check for proper tab indentation
+        if [[ "$line" =~ ^[[:space:]] ]]; then
+            if [[ "$line" =~ ^[[:space:]]*[^[:space:]] ]]; then
+                # Check if it starts with tab
+                if [[ "${line:0:1}" != $'\t' ]]; then
+                    echo "Line $line_num: Should use tabs for indentation, not spaces"
+                    errors=$((errors + 1))
+                fi
+            fi
+        fi
+    done < "$file"
+    
+    return $errors
+}
+
+# Function to resolve @file directive
+resolve_file_directive() {
+    local file_path="$1"
+    local base_dir="$2"
+    
+    # Handle relative paths
+    if [[ "$file_path" != /* ]]; then
+        file_path="$base_dir/$file_path"
+    fi
+    
+    if [[ -f "$file_path" ]]; then
+        echo "### File: $file_path"
+        echo "\`\`\`"
+        cat "$file_path"
+        echo "\`\`\`"
+        echo
+    else
+        echo "### File: $file_path (NOT FOUND)"
+        echo
+    fi
+}
+
+# Process .lp file function - resolve @file directives and pass through content
+process_lp_file() {
+    local file="$1"
+    local base_dir="$(dirname "$file")"
+    local processed_content=""
+    local in_file_block=false
+    local referenced_files=""
+    
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Check if this is an @file directive
+        if [[ "$line" =~ ^[[:space:]]*@file[[:space:]]*$ ]]; then
+            in_file_block=true
+            processed_content="$processed_content$line"$'\n'
+            continue
+        fi
+        
+        # If we're in a file block and this line is indented, it's a file path
+        if [[ "$in_file_block" == "true" && "$line" =~ ^[[:space:]][[:space:]]+ ]]; then
+            local file_path=$(echo "${line#$'\t'}" | xargs)  # Remove tab and trim
+            if [[ -n "$file_path" ]]; then
+                processed_content="$processed_content$line"$'\n'
+                referenced_files="$referenced_files$(resolve_file_directive "$file_path" "$base_dir")"
+            fi
+            continue
+        fi
+        
+        # If we hit a non-indented line or a directive, we're out of file block
+        if [[ "$line" =~ ^[a-zA-Z] || "$line" =~ ^[[:space:]]*[a-zA-Z@] ]]; then
+            in_file_block=false
+        fi
+        
+        # Pass through all other content as-is
+        processed_content="$processed_content$line"$'\n'
+    done < "$file"
+    
+    # Generate prompt
+    cat << EOF
+# Project Generation Request
+
+---
+
+## llmproj DSL Specification
+
+You are working with the **llmproj** DSL - a minimal, tab-delimited, human-readable language for scaffolding software projects using LLMs. This DSL focuses on speed, clarity, and intelligent defaults with enough structure to guide generation, especially for developers working outside their domain expertise.
+
+### DSL Syntax Rules
+- **Section headers**: no indentation (project, environment, dependencies, structure)
+- **Directives**: \`directive:\` with single tab indent
+- **Nested values**: single tab indent per level
+- **Dynamic resources**: \`@resource\` with single tab indent
+- **Multiple files**: single tab indent per level under \`@file\`
+- **Freeform context**: single tab indent, after all directives/resources
+
+### Section-Specific Directives
+
+**project section:**
+- \`name:\` - project identifier
+- \`description:\` - one-line summary
+- \`explore:\` - explore project approaches/patterns
+- \`@file\` - reference context files
+- \`@git\` - set up git repository
+
+**environment section:**
+- \`platform:\` - web, ios, android, cli, desktop
+- \`runtime:\` - node18+, python3.9+, go1.20+
+- \`deploy:\` - vercel, aws, heroku, docker
+- \`explore:\` - explore environment/deployment options
+- \`@file\` - reference environment config files
+
+**dependencies section:**
+- \`explore:\` - explore dependency choices (general or specific)
+- \`auto:\` - LLM chooses best dependency options
+- \`no:\` - explicit exclusion of packages
+- \`version:\` - package@version constraints
+- \`@file\` - reference dependency lists/configs
+
+**structure section:**
+- \`skip:\` - don't generate this file/folder
+- \`stub:\` - basic/minimal implementation
+- \`explore:\` - explore structure patterns/conventions
+- \`@file\` - reference structure context files
+
+### Explore Directive Behavior
+The \`explore:\` directive works in two modes:
+
+**Specific Exploration**: \`explore: topic\`
+- Generates a markdown overview of options and tradeoffs for the specified topic
+- Example: \`explore: testing\` creates analysis of testing frameworks and approaches
+- Does not make final decisions, just provides information for informed choice
+
+**General Exploration**: \`explore:\`
+- Generates a broad overview of approaches for the entire section context
+- Example: In dependencies section, explores general dependency strategy approaches
+- Helps when unsure about overall direction for that aspect of the project
+
+**Output Location**: All exploration documents should be saved to \`.llmproj/explore/<topic>.md\`
+- Specific: \`.llmproj/explore/testing.md\`
+- General: \`.llmproj/explore/dependencies.md\`, \`.llmproj/explore/environment.md\`, etc.
+
+### Implementation Requirements
+When generating code based on this DSL:
+1. **Parse Structure**: Extract sections, directives, dynamic resources, and freeform context
+2. **Validate Syntax**: Ensure proper indentation and directive placement
+3. **Resolve Files**: Read referenced files from \`@file\` directives and include content
+4. **Process Exploration**: Generate exploration documents for \`explore\` directives
+5. **Follow Directives**: Implement \`skip\`, \`stub\`, version constraints, exclusions, etc.
+
+---
+
+## Project Specification
+
+\`\`\`
+$processed_content\`\`\`
+
+$( [[ -n "$referenced_files" ]] && echo -e "\n## Referenced Files\n\n$referenced_files" )
+
+---
+
+## Generation Instructions
+
+### Core Requirements
+- **Follow the llmproj DSL specifications** outlined above
+- **Use tab-delimited format** for any .lp files generated
+- **Implement proper indentation rules** as specified in syntax rules
+- **Handle @file directive resolution** by reading and including referenced files
+- **Generate exploration documents** in .llmproj/explore/ directory as specified
+
+### Project Implementation Guidelines
+- Focus on **speed, clarity, and intelligent defaults**
+- Design for **developers working outside their domain expertise**
+- Ensure the generated project structure follows **modern conventions**
+- When in doubt, **prefer minimal, maintainable solutions**
+
+### File Generation Rules
+- **Skip**: Don't generate files/folders marked with \`skip:\`
+- **Stub**: Create basic/minimal implementations for files marked with \`stub:\`
+- **Version constraints**: Honor package@version specifications in dependencies
+- **Exclusions**: Respect packages marked with \`no:\`
+
+### Exploration Document Format
+When generating exploration documents:
+- Use clear **markdown formatting**
+- Include **options and tradeoffs** for each approach
+- Provide **actionable recommendations** 
+- Focus on **practical implementation guidance**
+- Save to appropriate \`.llmproj/explore/<topic>.md\` path
+
+### Quality Standards
+- Generate **production-ready code** with proper error handling
+- Include **clear documentation** and comments where helpful
+- Follow **security best practices** and never expose sensitive information
+- Ensure **accessibility** and **performance** considerations where applicable
+EOF
+}
+
+# Main execution
+case "$COMMAND" in
+    validate)
+        echo "Validating $INPUT_FILE..."
+        if validate_lp_file "$INPUT_FILE"; then
+            echo "✓ Validation passed"
+            exit 0
+        else
+            echo "✗ Validation failed"
+            exit 1
+        fi
+        ;;
+    build)
+        prompt_output=$(process_lp_file "$INPUT_FILE")
+        
+        if [[ "$USE_CLIPBOARD" == "true" ]]; then
+            if command -v pbcopy &> /dev/null; then
+                echo "$prompt_output" | pbcopy
+                echo "Prompt copied to clipboard"
+            elif command -v xclip &> /dev/null; then
+                echo "$prompt_output" | xclip -selection clipboard
+                echo "Prompt copied to clipboard"
+            else
+                echo "Error: No clipboard utility found (pbcopy or xclip)"
+                exit 1
+            fi
+        elif [[ -n "$OUTPUT_FILE" ]]; then
+            echo "$prompt_output" > "$OUTPUT_FILE"
+            echo "Prompt saved to $OUTPUT_FILE"
+        else
+            echo "$prompt_output"
+        fi
+        ;;
+    *)
+        echo "Error: Unknown command '$COMMAND'"
+        show_help
+        exit 1
+        ;;
+esac
