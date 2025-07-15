@@ -15,6 +15,7 @@ Usage:
     llmproj build <file.lp> -o <output>     Save prompt to file
     llmproj build <file.lp> --clipboard     Copy prompt to clipboard
     llmproj validate <file.lp>              Validate syntax only
+    llmproj template [name]                 Create template .lp file (default: template.lp)
 
 Options:
     -o, --output <file>    Save output to file
@@ -31,7 +32,7 @@ USE_CLIPBOARD=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        build|validate)
+        build|validate|template)
             COMMAND="$1"
             shift
             ;;
@@ -67,20 +68,28 @@ if [[ -z "$COMMAND" ]]; then
     exit 1
 fi
 
-if [[ -z "$INPUT_FILE" ]]; then
-    echo "Error: No input file specified"
-    show_help
-    exit 1
-fi
+# Template command doesn't need input file validation
+if [[ "$COMMAND" != "template" ]]; then
+    if [[ -z "$INPUT_FILE" ]]; then
+        echo "Error: No input file specified"
+        show_help
+        exit 1
+    fi
 
-if [[ ! -f "$INPUT_FILE" ]]; then
-    echo "Error: File '$INPUT_FILE' not found"
-    exit 1
-fi
+    if [[ ! -f "$INPUT_FILE" ]]; then
+        echo "Error: File '$INPUT_FILE' not found"
+        exit 1
+    fi
 
-# Check if file has .lp extension
-if [[ "$INPUT_FILE" != *.lp ]]; then
-    echo "Warning: File '$INPUT_FILE' doesn't have .lp extension"
+    # Check if file has .lp extension
+    if [[ "$INPUT_FILE" != *.lp ]]; then
+        echo "Warning: File '$INPUT_FILE' doesn't have .lp extension"
+    fi
+else
+    # For template command, INPUT_FILE is the template name (default to "template")
+    if [[ -z "$INPUT_FILE" ]]; then
+        INPUT_FILE="template"
+    fi
 fi
 
 # Basic validation function
@@ -300,6 +309,66 @@ When generating exploration documents:
 EOF
 }
 
+# Generate template .lp file
+generate_template() {
+    local template_name="$1"
+    local output_file="${template_name}.lp"
+    
+    if [[ -f "$output_file" ]]; then
+        echo "Error: File '$output_file' already exists"
+        exit 1
+    fi
+    
+    cat > "$output_file" << 'EOF'
+# Project configuration - defines the project name, description, and setup
+project
+	name: my-project
+	description: A brief description of what this project does
+	# explore: - uncomment to generate exploration of project approaches
+	# @git - uncomment to initialize git repository
+	# @file - uncomment and add paths to reference context files
+	#	path/to/context.md
+	
+	# Add any additional context or requirements here with single tab indent
+
+# Environment setup - defines platform, runtime, and deployment configuration
+environment
+	platform: web
+	runtime: node18+
+	deploy: vercel
+	# explore: - uncomment to generate exploration of environment options
+	# @file - uncomment and add paths to reference environment config files
+	#	package.json
+	#	.env.example
+	
+	# Add environment-specific requirements here with single tab indent
+
+# Dependencies management - defines package requirements and constraints
+dependencies
+	# explore: - uncomment to generate exploration of dependency choices
+	# auto: - uncomment to let LLM choose best dependency options
+	# no: package-name - uncomment to exclude specific packages
+	# version: package@version - uncomment to specify version constraints
+	# @file - uncomment and add paths to reference dependency files
+	#	requirements.txt
+	#	package.json
+	
+	# Add dependency requirements here with single tab indent
+
+# Project structure - defines files, folders, and generation hints
+structure
+	# skip: path/to/skip - uncomment to exclude files/folders from generation
+	# stub: path/to/stub - uncomment to create minimal implementations
+	# explore: - uncomment to generate exploration of structure patterns
+	# @file - uncomment and add paths to reference structure files
+	#	docs/architecture.md
+	
+	# Add structure requirements here with single tab indent
+EOF
+    
+    echo "Template created: $output_file"
+}
+
 # Main execution
 case "$COMMAND" in
     validate)
@@ -332,6 +401,9 @@ case "$COMMAND" in
         else
             echo "$prompt_output"
         fi
+        ;;
+    template)
+        generate_template "$INPUT_FILE"
         ;;
     *)
         echo "Error: Unknown command '$COMMAND'"
